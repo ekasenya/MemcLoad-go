@@ -5,12 +5,13 @@ import (
 	"fmt"
 	//"io"
 	//"io/ioutil"
-	//"log"
-	//"os"
+	"log"
+	"os"
 	"strings"
 	"strconv"
 	"reflect"
 	"math"
+	"flag"
 	"./appsinstalled"
 
 	"github.com/golang/protobuf/proto"
@@ -81,8 +82,49 @@ func prototest() bool {
 	}	
 
 	return true	
+}
 
+
+type Opts struct {
+    IsTest bool
+    LogFile string
+    Dry bool
+    Pattern string
+    Idfa string
+    Gaid string
+    Adid string
+    Dvid string
+}
+
+func configLog(opts Opts) {
+	if opts.LogFile > "" {
+		f, err := os.OpenFile(opts.LogFile, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0666)
+		if err != nil {
+		    log.Fatalf("error opening file: %v", err)
+		}
+		defer f.Close()
+
+		log.SetOutput(f)
+	}	
+}
 
 func main() {
+
+	opts := Opts{}
+
+	flag.BoolVar(&opts.IsTest, "t", false, "test mode")
+	flag.StringVar(&opts.LogFile, "l", "", "log file")
+
+	flag.BoolVar(&opts.Dry, "dry", false, "run in debug mode")
+	flag.StringVar(&opts.Pattern, "pattern", "/data/appsinstalled/*.tsv.gz", "log path pattern")
+	flag.StringVar(&opts.Idfa, "idfa", "127.0.0.1:33013", "idfa server address")
+	flag.StringVar(&opts.Gaid, "gaid", "127.0.0.1:33014", "gaid server address")
+	flag.StringVar(&opts.Adid, "adid", "127.0.0.1:33015", "adid server address")
+	flag.StringVar(&opts.Dvid, "dvid", "127.0.0.1:33016", "dvid server address")
+
+	flag.Parse()
+
+	configLog(opts)
+
 	fmt.Println(prototest())
 }
