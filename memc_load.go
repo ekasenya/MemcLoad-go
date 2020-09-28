@@ -12,6 +12,8 @@ import (
 	"reflect"
 	"math"
 	"flag"
+	"runtime"
+	"path/filepath"
 	"./appsinstalled"
 
 	"github.com/golang/protobuf/proto"
@@ -19,6 +21,8 @@ import (
 
 
 const float64EqualityThreshold = 1e-9
+
+type mapWorkers = map[string]*MemcWorker
 
 func floatEqual(a, b float64) bool {
     return math.Abs(a - b) <= float64EqualityThreshold
@@ -86,19 +90,24 @@ func prototest() bool {
 
 
 type Opts struct {
-    IsTest bool
-    LogFile string
-    Dry bool
-    Pattern string
-    Idfa string
-    Gaid string
-    Adid string
-    Dvid string
+    isTest bool
+    logFile string
+    dry bool
+    pattern string
+    idfa string
+    gaid string
+    adid string
+    dvid string
+}
+
+func(opts Opts) String() string {
+	return fmt.Sprintf("t: %s, l: %s, dry: %s, pattern: %s, idfa: %s, gaid: %s, adid: %s, dvid: %s", 
+		strconv.FormatBool(opts.isTest), opts.logFile, strconv.FormatBool(opts.dry), opts.pattern, opts.idfa, opts.gaid, opts.adid, opts.dvid) 
 }
 
 func configLog(opts Opts) {
-	if opts.LogFile > "" {
-		f, err := os.OpenFile(opts.LogFile, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0666)
+	if opts.logFile > "" {
+		f, err := os.OpenFile(opts.logFile, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0666)
 		if err != nil {
 		    log.Fatalf("error opening file: %v", err)
 		}
@@ -108,23 +117,118 @@ func configLog(opts Opts) {
 	}	
 }
 
-func main() {
-
+func readOptions() Opts {
 	opts := Opts{}
 
-	flag.BoolVar(&opts.IsTest, "t", false, "test mode")
-	flag.StringVar(&opts.LogFile, "l", "", "log file")
+	flag.BoolVar(&opts.isTest, "t", false, "test mode")
+	flag.StringVar(&opts.logFile, "l", "", "log file")
 
-	flag.BoolVar(&opts.Dry, "dry", false, "run in debug mode")
-	flag.StringVar(&opts.Pattern, "pattern", "/data/appsinstalled/*.tsv.gz", "log path pattern")
-	flag.StringVar(&opts.Idfa, "idfa", "127.0.0.1:33013", "idfa server address")
-	flag.StringVar(&opts.Gaid, "gaid", "127.0.0.1:33014", "gaid server address")
-	flag.StringVar(&opts.Adid, "adid", "127.0.0.1:33015", "adid server address")
-	flag.StringVar(&opts.Dvid, "dvid", "127.0.0.1:33016", "dvid server address")
+	flag.BoolVar(&opts.dry, "dry", false, "run in debug mode")
+	flag.StringVar(&opts.pattern, "pattern", "./data/appsinstalled/[^.]*.tsv.gz", "log path pattern")
+	flag.StringVar(&opts.idfa, "idfa", "127.0.0.1:33013", "idfa server address")
+	flag.StringVar(&opts.gaid, "gaid", "127.0.0.1:33014", "gaid server address")
+	flag.StringVar(&opts.adid, "adid", "127.0.0.1:33015", "adid server address")
+	flag.StringVar(&opts.dvid, "dvid", "127.0.0.1:33016", "dvid server address")
 
 	flag.Parse()
 
+	return opts
+}
+
+func process_file(filename string, memcDict mapWorkers) {
+	// processed := 0
+	// error := 0
+
+	fmt.Printf("Process file: %s\n", filename)
+}
+
+
+type MemcWorker struct {
+	ipAddr string
+	receiveChan chan int
+	quitChan chan int
+
+}
+
+func writeToMemc(worker MemcWorker) {
+	for {
+	select {
+		case <- worker.quitChan:
+			return
+		case i := <- worker.receiveChan:
+			fmt.Println(worker.ipAddr, i)
+		}
+	}
+}
+
+func createWorkers(opts Opts) mapWorkers {	
+    memcDict := make(mapWorkers)
+
+    memcDict["idfa"] = &MemcWorker{}
+    memcDict["idfa"].ipAddr = opts.idfa
+    memcDict["idfa"].receiveChan = make(chan int)
+    memcDict["idfa"].quitChan = make(chan int)   
+
+    memcDict["gaid"] = &MemcWorker{}
+    memcDict["gaid"].ipAddr = opts.gaid
+    memcDict["gaid"].receiveChan = make(chan int)
+    memcDict["gaid"].quitChan = make(chan int)
+
+    memcDict["adid"] = &MemcWorker{}
+    memcDict["adid"].ipAddr = opts.adid
+    memcDict["adid"].receiveChan = make(chan int)
+    memcDict["adid"].quitChan = make(chan int)
+
+    memcDict["dvid"] = &MemcWorker{}
+    memcDict["dvid"].ipAddr = opts.dvid
+    memcDict["dvid"].receiveChan = make(chan int)
+    memcDict["dvid"].quitChan = make(chan int)
+
+    return memcDict
+
+}
+
+func startWorkes(memcDict mapWorkers) {
+	for _, worker := range memcDict {
+    	go writeToMemc(*	worker)
+	}
+}
+
+func stopWorkes(memcDict mapWorkers) {
+	for _, worker := range memcDict {
+    	worker.quitChan <- 0
+	}
+}
+
+
+func main() {
+	opts := readOptions()
 	configLog(opts)
 
-	fmt.Println(prototest())
+	if opts.isTest {
+		if !prototest() {
+			log.Println("Test FAILED")
+		} else {
+			log.Println("Test success")
+		}	
+
+		os.Exit(0)
+	}
+
+	log.Printf("Memc loader started with options: %s\n", opts)
+	fmt.Println(runtime.NumCPU())
+
+	memcDict := createWorkers(opts)
+  
+	files, _ := filepath.Glob(opts.pattern)
+
+	if len(files) > 0 {
+		startWorkes(memcDict)
+
+		for _, filename := range files {
+			process_file(filename, memcDict)
+		}
+		stopWorkes(memcDict)
+	}
+
 }
