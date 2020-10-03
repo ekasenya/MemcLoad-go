@@ -1,10 +1,7 @@
 package main
 
 import (
-	//"bufio"
 	"fmt"
-	//"io"
-	//"io/ioutil"
 	"log"
 	"os"
 	"strings"
@@ -18,10 +15,11 @@ import (
 	"sync"
 	"time"
 	"compress/gzip"
-	"./appsinstalled"
 
 	"github.com/bradfitz/gomemcache/memcache"
 	"github.com/golang/protobuf/proto"
+
+	"./appsinstalled"
 )
 
 
