@@ -1,20 +1,19 @@
 package main
 
 import (
+	"bufio"
+	"compress/gzip"
+	"flag"
 	"fmt"
 	"log"
-	"os"
-	"strings"
-	"strconv"
-	"reflect"
 	"math"
-	"flag"
-	"runtime"
+	"os"
 	"path/filepath"
-	"bufio"
+	"reflect"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
-	"compress/gzip"
 
 	"github.com/bradfitz/gomemcache/memcache"
 	"github.com/golang/protobuf/proto"
@@ -22,77 +21,70 @@ import (
 	"./appsinstalled"
 )
 
-
 const (
 	float64EqualityThreshold = 1e-9
-	bufSize = 3
-	maxRetryAttempts = 5
-	normalErrRate = 0.01
+	bufSize                  = 3
+	maxRetryAttempts         = 5
+	normalErrRate            = 0.01
 )
-
 
 type mapWorkers = map[string]*MemcWorker
 
 type AppsInstalled struct {
 	dev_type string
 	dev_id   string
-	lat     float64
-	lon     float64
-	apps    []uint32
+	lat      float64
+	lon      float64
+	apps     []uint32
 }
 
 func (app *AppsInstalled) String() string {
 	return fmt.Sprintf("dev_type: %s dev_id: %s lat: %.2f lon: %.2f apps: %v", app.dev_type, app.dev_id, app.lat, app.lon, app.apps)
 }
 
-
 type Opts struct {
-    isTest bool
-    logFile string
-    dry bool
-    pattern string
-    idfa string
-    gaid string
-    adid string
-    dvid string
+	isTest  bool
+	logFile string
+	dry     bool
+	pattern string
+	idfa    string
+	gaid    string
+	adid    string
+	dvid    string
 }
 
-func(opts Opts) String() string {
-	return fmt.Sprintf("t: %s, l: %s, dry: %s, pattern: %s, idfa: %s, gaid: %s, adid: %s, dvid: %s", 
-		strconv.FormatBool(opts.isTest), opts.logFile, strconv.FormatBool(opts.dry), opts.pattern, opts.idfa, opts.gaid, opts.adid, opts.dvid) 
+func (opts Opts) String() string {
+	return fmt.Sprintf("t: %s, l: %s, dry: %s, pattern: %s, idfa: %s, gaid: %s, adid: %s, dvid: %s",
+		strconv.FormatBool(opts.isTest), opts.logFile, strconv.FormatBool(opts.dry), opts.pattern, opts.idfa, opts.gaid, opts.adid, opts.dvid)
 }
-
 
 type MemcWorker struct {
-	wg *sync.WaitGroup
-	mc *memcache.Client 
-	ipAddr string
+	wg          *sync.WaitGroup
+	mc          *memcache.Client
+	ipAddr      string
 	receiveChan chan *AppsInstalled
-	resultChan chan int
-	quitChan chan int
-	dry bool
-	processed int
-	errors int
-
+	quitChan    chan int
+	dry         bool
+	processed   int
+	errors      int
 }
 
 func dotRename(path string) {
-    head, fn := filepath.Split(path)
+	head, fn := filepath.Split(path)
 
-    err := os.Rename(path, filepath.Join(head, "." + fn))
+	err := os.Rename(path, filepath.Join(head, "."+fn))
 	if err != nil {
 		log.Fatal("Cannot rename file %s: %s", path, err)
 	}
 }
-
 
 func insertMemcache(worker *MemcWorker, appInfo *AppsInstalled) bool {
 	key := fmt.Sprintf("%s:%s", appInfo.dev_type, appInfo.dev_id)
 
 	ua := &appsinstalled.UserApps{
 		Apps: appInfo.apps,
-		Lat: &appInfo.lat,
-		Lon: &appInfo.lon,
+		Lat:  &appInfo.lat,
+		Lon:  &appInfo.lon,
 	}
 
 	if worker.dry {
@@ -117,48 +109,43 @@ func insertMemcache(worker *MemcWorker, appInfo *AppsInstalled) bool {
 				return true
 			}
 			attempt_num++
-			time.Sleep(time.Duration(attempt_num*10) * time.Millisecond)	
-		}	
+			time.Sleep(time.Duration(attempt_num*10) * time.Millisecond)
+		}
 
 		log.Printf("Cannot write to memcache %s", worker.ipAddr)
-		return false	
+		return false
 	}
 
-
 }
-
 
 func writeToMemc(worker *MemcWorker) {
-	for {
-		appInfo := <- worker.receiveChan
-		if appInfo == nil {
-			worker.wg.Done()
-			return
+	defer worker.wg.Done()
+
+	for appInfo := range worker.receiveChan {
+		if insertMemcache(worker, appInfo) {
+			worker.processed++
 		} else {
-			if insertMemcache(worker, appInfo) {
-				worker.processed++
-			} else {
-				worker.errors++
-			}
+			worker.errors++
 		}
 	}
-}
 
+	return
+}
 
 func parseAppInstalled(line string) (app *AppsInstalled, err error) {
 	app = nil
 	err = nil
 
-	words := strings.Split(line,"\t")
-	raw_apps := strings.Split(words[4],",")
+	words := strings.Split(line, "\t")
+	raw_apps := strings.Split(words[4], ",")
 
-	lat, err := strconv.ParseFloat(words[2], 64) 
+	lat, err := strconv.ParseFloat(words[2], 64)
 	if err != nil {
 		log.Printf("lon conversation error: %s\n", err)
 		return
 	}
 
-	lon, err := strconv.ParseFloat(words[3], 64)   
+	lon, err := strconv.ParseFloat(words[3], 64)
 	if err != nil {
 		log.Printf("lat conversation error: %s\n", err)
 		return
@@ -171,45 +158,49 @@ func parseAppInstalled(line string) (app *AppsInstalled, err error) {
 		if err != nil {
 			log.Printf("Not all user apps are digits: `%s` %s", line, app)
 		} else {
-			apps = append(apps, uint32(num))	
+			apps = append(apps, uint32(num))
 		}
 
 	}
 
 	app = &AppsInstalled{
 		dev_type: words[0],
-		dev_id: words[1],
-		lat: lat,
-		lon: lon,
-		apps: apps,
+		dev_id:   words[1],
+		lat:      lat,
+		lon:      lon,
+		apps:     apps,
 	}
 
 	return
 }
 
+func processFile(opts Opts, filename string, wg *sync.WaitGroup) {
 
-func processFile(filename string, memcDict mapWorkers, wg *sync.WaitGroup) {
-	 processed := 0
-	 errors := 0
+	var wgWorkers sync.WaitGroup
+
+	processed := 0
+	errors := 0
 
 	log.Printf("Process file: %s\n", filename)
 
+	memcDict := createWorkers(opts, &wgWorkers)
+
 	f, err := os.Open(filename)
-    if err != nil {
-        log.Fatalf("Error opening file %s %s\n", filename, err)
-        return
-    }
-    defer f.Close()
+	if err != nil {
+		log.Fatalf("Error opening file %s %s\n", filename, err)
+		return
+	}
+	defer f.Close()
 
-    gz, err := gzip.NewReader(f)
-    if err != nil {
-        log.Fatalf("Error opening file %s %s\n", filename, err)
-        return
-    }
-    defer gz.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		log.Fatalf("Error opening file %s %s\n", filename, err)
+		return
+	}
+	defer gz.Close()
 
-    wg.Add(len(memcDict))
-    startWorkes(memcDict)
+	wgWorkers.Add(len(memcDict))
+	startWorkes(memcDict)
 
 	fileScanner := bufio.NewScanner(gz)
 
@@ -226,62 +217,58 @@ func processFile(filename string, memcDict mapWorkers, wg *sync.WaitGroup) {
 			} else {
 				memcWorker.receiveChan <- appInfo
 			}
-		}	
+		}
 	}
 
 	stopWorkes(memcDict)
-	wg.Wait()
+	wgWorkers.Wait()
 
 	for _, worker := range memcDict {
-    	processed += worker.processed
-    	errors += worker.errors
+		processed += worker.processed
+		errors += worker.errors
 	}
 
-    errRate := float64(errors) / float64(processed)
-    if errRate < normalErrRate {
-        log.Printf("%s. Acceptable error rate (%.2f). Successfull load\n", filename, errRate)
-    } else {
-        log.Printf("%s. High error rate (%.2f > %.2f). Failed load", filename, errRate, normalErrRate)
-    }
+	errRate := float64(errors) / float64(processed)
+	if errRate < normalErrRate {
+		log.Printf("%s. Acceptable error rate (%.2f). Successfull load\n", filename, errRate)
+	} else {
+		log.Printf("%s. High error rate (%.2f > %.2f). Failed load", filename, errRate, normalErrRate)
+	}
 
-    dotRename(filename)
+	//dotRename(filename)
+
+	wg.Done()
 
 }
 
+func createWorkers(opts Opts, wg *sync.WaitGroup) mapWorkers {
+	memcDict := make(mapWorkers)
 
+	memcDict["idfa"] = &MemcWorker{}
+	memcDict["idfa"].ipAddr = opts.idfa
+	memcDict["idfa"].receiveChan = make(chan *AppsInstalled, bufSize)
+	memcDict["idfa"].wg = wg
+	memcDict["idfa"].dry = opts.dry
 
-func createWorkers(opts Opts, resultChan chan int, wg *sync.WaitGroup) mapWorkers {	
-    memcDict := make(mapWorkers)
+	memcDict["gaid"] = &MemcWorker{}
+	memcDict["gaid"].ipAddr = opts.gaid
+	memcDict["gaid"].receiveChan = make(chan *AppsInstalled, bufSize)
+	memcDict["gaid"].wg = wg
+	memcDict["gaid"].dry = opts.dry
 
-    memcDict["idfa"] = &MemcWorker{}
-    memcDict["idfa"].ipAddr = opts.idfa
-    memcDict["idfa"].receiveChan = make(chan *AppsInstalled, bufSize)
-    memcDict["idfa"].resultChan = resultChan
-    memcDict["idfa"].wg = wg
-    memcDict["idfa"].dry = opts.dry
+	memcDict["adid"] = &MemcWorker{}
+	memcDict["adid"].ipAddr = opts.adid
+	memcDict["adid"].receiveChan = make(chan *AppsInstalled, bufSize)
+	memcDict["adid"].wg = wg
+	memcDict["adid"].dry = opts.dry
 
-    memcDict["gaid"] = &MemcWorker{}
-    memcDict["gaid"].ipAddr = opts.gaid
-    memcDict["gaid"].receiveChan = make(chan *AppsInstalled, bufSize)
-    memcDict["gaid"].resultChan = resultChan
-    memcDict["gaid"].wg = wg
-    memcDict["gaid"].dry = opts.dry
+	memcDict["dvid"] = &MemcWorker{}
+	memcDict["dvid"].ipAddr = opts.dvid
+	memcDict["dvid"].receiveChan = make(chan *AppsInstalled, bufSize)
+	memcDict["dvid"].wg = wg
+	memcDict["dvid"].dry = opts.dry
 
-    memcDict["adid"] = &MemcWorker{}
-    memcDict["adid"].ipAddr = opts.adid
-    memcDict["adid"].receiveChan = make(chan *AppsInstalled, bufSize)
-    memcDict["adid"].resultChan = resultChan
-    memcDict["adid"].wg = wg
-    memcDict["adid"].dry = opts.dry
-
-    memcDict["dvid"] = &MemcWorker{}
-    memcDict["dvid"].ipAddr = opts.dvid
-    memcDict["dvid"].receiveChan = make(chan *AppsInstalled, bufSize)
-    memcDict["dvid"].resultChan = resultChan
-    memcDict["dvid"].wg = wg
-    memcDict["dvid"].dry = opts.dry
-
-    return memcDict
+	return memcDict
 
 }
 
@@ -289,26 +276,26 @@ func startWorkes(memcDict mapWorkers) {
 	for _, worker := range memcDict {
 		worker.processed = 0
 		worker.errors = 0
-    	go writeToMemc(worker)
+		go writeToMemc(worker)
 	}
 }
 
 func stopWorkes(memcDict mapWorkers) {
 	for _, worker := range memcDict {
-    	worker.receiveChan <- nil
+		close(worker.receiveChan)
 	}
 }
 
 func configLog(opts Opts) {
 	if opts.logFile > "" {
-		f, err := os.OpenFile(opts.logFile, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0666)
+		f, err := os.OpenFile(opts.logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 		if err != nil {
-		    log.Fatalf("error opening file: %v", err)
+			log.Fatalf("error opening file: %v", err)
 		}
 		defer f.Close()
 
 		log.SetOutput(f)
-	}	
+	}
 }
 
 func readOptions() Opts {
@@ -329,27 +316,25 @@ func readOptions() Opts {
 	return opts
 }
 
-
 func floatEqual(a, b float64) bool {
-    return math.Abs(a - b) <= float64EqualityThreshold
+	return math.Abs(a-b) <= float64EqualityThreshold
 }
 
-func prototest() bool {    
+func prototest() bool {
 	sample := "idfa\t1rfw452y52g2gq4g\t55.55\t42.42\t1423,43,567,3,7,23\ngaid\t7rfw452y52g2gq4g\t55.55\t42.42\t7423,424"
 
-
-	lines := strings.Split(sample,"\n")
+	lines := strings.Split(sample, "\n")
 	for _, line := range lines {
 
 		appInfo, err := parseAppInstalled(line)
 		if err != nil {
-			return false			
+			return false
 		}
 
 		ua := &appsinstalled.UserApps{
 			Apps: appInfo.apps,
-			Lat: &appInfo.lat,
-			Lon: &appInfo.lon,
+			Lat:  &appInfo.lat,
+			Lon:  &appInfo.lon,
 		}
 
 		data, err := proto.Marshal(ua)
@@ -369,11 +354,10 @@ func prototest() bool {
 			return false
 		}
 
-	}	
+	}
 
-	return true	
+	return true
 }
-
 
 func main() {
 	opts := readOptions()
@@ -384,24 +368,25 @@ func main() {
 			log.Println("Test FAILED")
 		} else {
 			log.Println("Test success")
-		}	
+		}
 
 		os.Exit(0)
 	}
 
 	log.Printf("Memc loader started with options: %s\n", opts)
-	fmt.Println(runtime.NumCPU())
 
-	resultChan := make(chan int)
-	var wg sync.WaitGroup
-	memcDict := createWorkers(opts, resultChan, &wg)
-  
 	files, _ := filepath.Glob(opts.pattern)
 
 	if len(files) > 0 {
+
+		var wg sync.WaitGroup
+
 		for _, filename := range files {
-			processFile(filename, memcDict, &wg)
+			wg.Add(1)
+			go processFile(opts, filename, &wg)
 		}
+
+		wg.Wait()
 	}
 
 }
